@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+.claude/
+logs/
+.envvars
+.last_task_client
+.task_history
+.input_history
