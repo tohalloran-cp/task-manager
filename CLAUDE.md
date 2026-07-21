@@ -20,7 +20,7 @@ tasks.py               Main interactive CLI — commands, inference, voice, phot
 voice_dump.py          Non-interactive voice transcript processor (called by widget)
 photo_task.py          Vision-based task extractor from screenshots (called by widget)
 morning_brief.py       Daily notification — top priorities, overdue, due today
-deploy.sh              Moves files from Downloads to correct locations, runs tests
+deploy.sh              Copies files from git checkout to correct locations, runs tests
 tasks_run.sh           Launches tasks.py (sources envvars, starts Ollama as fallback)
 tasks_widget.sh        Home screen widget → opens terminal with tasks.py
 voice_start.sh         Home screen widget → starts microphone recording (background)
@@ -164,8 +164,9 @@ into one. Always verify function boundaries after edits. The test suite catches 
 because merged functions cause NameErrors or AttributeErrors.
 
 ### Deploy pattern
-`deploy.sh` **moves** (not copies) files from `~/storage/downloads/` to their
-correct locations. This ensures there's never an ambiguous old version in Downloads.
+`deploy.sh` **copies** files from the git checkout (`code/`) to their correct
+runtime locations (`Documents/`, `~/.shortcuts/`). The repo checkout is the
+source of truth — `git pull` updates it, `deploy.sh` never modifies it.
 
 ---
 
@@ -197,14 +198,14 @@ Both test files must be updated in the same PR/commit as the feature.
 
 ## Deploy workflow
 
-Current workflow (phone-based):
-1. Download updated files from Claude.ai to `~/storage/downloads/`
-2. Run `deploy` alias → moves files, runs tests
+Repo: https://github.com/tohalloran-cp/task-manager
 
-Future workflow (Claude Code):
-1. Edit in Claude Code on laptop
-2. `git push`
-3. On phone: `git pull && bash deploy.sh`
+1. Edit in Claude Code on laptop, commit, `git push`
+2. On phone (Termux), run the `deploy` alias → `git pull` in the repo checkout,
+   then `bash code/deploy.sh` to copy files to their runtime locations and run
+   both test suites
+3. Repo checkout lives at `~/task-manager`; `deploy.sh` copies out from
+   `~/task-manager/code/` — the checkout itself is never the runtime location
 
 ---
 

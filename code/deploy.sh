@@ -1,8 +1,11 @@
 #!/data/data/com.termux/files/usr/bin/bash
-# deploy.sh — moves task-related files from Downloads to correct locations
-# Run after downloading updated files from Claude
+# deploy.sh — copies task-related files from this repo checkout to their
+# runtime locations, then runs the test suites.
+#
+# Usage (after "git pull" inside the repo):
+#   bash code/deploy.sh
 
-DOWNLOADS=~/storage/downloads
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 DOCS=/storage/emulated/0/Documents
 SHORTCUTS=~/.shortcuts/tasks
 
@@ -17,32 +20,40 @@ deploy() {
     local dst="$2"
     local perms="${3:-644}"
     if [ -f "$src" ]; then
-        mv "$src" "$dst"
+        cp "$src" "$dst"
         chmod "$perms" "$dst"
-        echo "  ✓ $(basename $src)"
+        echo "  ✓ $(basename "$src")"
     fi
 }
 
 # Python scripts → Documents
-deploy "$DOWNLOADS/tasks_core.py"      "$DOCS/tasks_core.py"
-deploy "$DOWNLOADS/tasks.py"           "$DOCS/tasks.py"
-deploy "$DOWNLOADS/test_tasks_core.py" "$DOCS/test_tasks_core.py"
-deploy "$DOWNLOADS/test_tasks.py"      "$DOCS/test_tasks.py"
-deploy "$DOWNLOADS/voice_dump.py"      "$DOCS/voice_dump.py"
-deploy "$DOWNLOADS/photo_task.py"      "$DOCS/photo_task.py"
-deploy "$DOWNLOADS/morning_brief.py"   "$DOCS/morning_brief.py"
+deploy "$SCRIPT_DIR/tasks_core.py"      "$DOCS/tasks_core.py"
+deploy "$SCRIPT_DIR/tasks.py"           "$DOCS/tasks.py"
+deploy "$SCRIPT_DIR/test_tasks_core.py" "$DOCS/test_tasks_core.py"
+deploy "$SCRIPT_DIR/test_tasks.py"      "$DOCS/test_tasks.py"
+deploy "$SCRIPT_DIR/voice_dump.py"      "$DOCS/voice_dump.py"
+deploy "$SCRIPT_DIR/photo_task.py"      "$DOCS/photo_task.py"
+deploy "$SCRIPT_DIR/morning_brief.py"   "$DOCS/morning_brief.py"
 
 # Shell scripts → Documents
-deploy "$DOWNLOADS/tasks_run.sh"  "$DOCS/tasks_run.sh"  755
+deploy "$SCRIPT_DIR/tasks_run.sh"  "$DOCS/tasks_run.sh"  755
 
 # Widget scripts → ~/.shortcuts/tasks (background, no terminal)
-deploy "$DOWNLOADS/voice_start.sh" "$SHORTCUTS/voice_start.sh" 755
-deploy "$DOWNLOADS/voice_dump.sh"  "$SHORTCUTS/voice_dump.sh"  755
-deploy "$DOWNLOADS/photo_task.sh"  "$SHORTCUTS/photo_task.sh"  755
+deploy "$SCRIPT_DIR/voice_start.sh" "$SHORTCUTS/voice_start.sh" 755
+deploy "$SCRIPT_DIR/voice_dump.sh"  "$SHORTCUTS/voice_dump.sh"  755
+deploy "$SCRIPT_DIR/photo_task.sh"  "$SHORTCUTS/photo_task.sh"  755
 
 # Widget scripts → ~/.shortcuts (foreground, opens terminal)
-deploy "$DOWNLOADS/tasks_widget.sh"        ~/.shortcuts/tasks_widget.sh        755
-deploy "$DOWNLOADS/morning_brief_show.sh"  ~/.shortcuts/morning_brief_show.sh  755
+deploy "$SCRIPT_DIR/tasks_widget.sh"        ~/.shortcuts/tasks_widget.sh        755
+deploy "$SCRIPT_DIR/morning_brief_show.sh"  ~/.shortcuts/morning_brief_show.sh  755
+
+# Remove retired files from previous deploys, if present
+for stale in "$DOCS/chat.py" "$DOCS/run.sh"; do
+    if [ -f "$stale" ]; then
+        rm -f "$stale"
+        echo "  ✗ removed retired file: $(basename "$stale")"
+    fi
+done
 
 # Run tests
 run_tests() {
