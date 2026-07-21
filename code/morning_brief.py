@@ -10,9 +10,11 @@ Version history:
          Overdue and due-today highlighted
          Focuses with no tasks flagged
          No API call — pure markdown parsing, works offline
+    1.1  Annotate overdue/due-today/top5/due-soon lines with "(for Name)"
+         when a task's [for ...] tag is set
 """
 
-VERSION = "1.0"
+VERSION = "1.1"
 
 import os
 import sys
@@ -81,23 +83,27 @@ def run_brief():
         overdue.sort(key=lambda x: x[0], reverse=True)
         lines.append(f"⚠️ OVERDUE ({len(overdue)})")
         for days, t in overdue[:3]:
-            lines.append(f"  #{t['priority']} [{t['_client']}] {t['text']} ({days}d)")
+            for_str = f" (for {t['for']})" if t.get("for") else ""
+            lines.append(f"  #{t['priority']} [{t['_client']}] {t['text']} ({days}d){for_str}")
 
     if due_today:
         lines.append(f"📅 DUE TODAY ({len(due_today)})")
         for t in due_today[:3]:
-            lines.append(f"  #{t['priority']} [{t['_client']}] {t['text']}")
+            for_str = f" (for {t['for']})" if t.get("for") else ""
+            lines.append(f"  #{t['priority']} [{t['_client']}] {t['text']}{for_str}")
 
     lines.append(f"🎯 TOP 5 PRIORITIES")
     for t in top5:
         due_str = f" [{t['due']}]" if t.get("due") else ""
-        lines.append(f"  #{t['priority']} [{t['_client']}] {t['text']}{due_str}")
+        for_str = f" (for {t['for']})" if t.get("for") else ""
+        lines.append(f"  #{t['priority']} [{t['_client']}] {t['text']}{due_str}{for_str}")
 
     if due_soon:
         due_soon.sort(key=lambda x: x[0])
         lines.append(f"📆 DUE THIS WEEK ({len(due_soon)})")
         for days, t in due_soon[:3]:
-            lines.append(f"  #{t['priority']} [{t['_client']}] {t['text']} (in {days}d)")
+            for_str = f" (for {t['for']})" if t.get("for") else ""
+            lines.append(f"  #{t['priority']} [{t['_client']}] {t['text']} (in {days}d){for_str}")
 
     if empty_focuses:
         lines.append(f"💤 EMPTY FOCUSES: {', '.join(empty_focuses[:3])}")

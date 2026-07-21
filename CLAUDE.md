@@ -6,7 +6,7 @@ A purpose-built task management system for a consultant working across multiple 
 Runs on an Android phone (Samsung S24 Ultra) via Termux. The primary interface is a
 terminal app, with home screen widgets for voice capture and photo processing.
 
-The owner is an agile coach and independent consultant at Nomad8, based in Wellington, NZ.
+The owner is an agile coach and independent consultant.
 He works across multiple clients and focuses per client, and wants to be the person who
 always does what he says he'll do.
 
@@ -52,6 +52,7 @@ Key functions:
 - `parse_task_file(client)` → dict with focuses, descriptions, tasks
 - `write_task_file(client, data)` — repacks priorities, writes markdown
 - `archive_task(client, task)` — appends to `client_archive.md`
+- `parse_archive_file(client)` → list of completed tasks (text, due, for, completed)
 - `next_recur_date(recur, from_date, due_date)` — calculates next occurrence
 - `list_clients()`, `client_file()`, `archive_file()`
 - `load_last_client()`, `save_last_client()`
@@ -64,7 +65,7 @@ One markdown file per client in `TASKS_DIR`:
 # Client Name
 
 ## General
-- [ ] #1 Task description [due 15.05.2026]
+- [ ] #1 Task description [due 15.05.2026] [for Sarah] [since 01.05.2026]
 - [~] #2 In progress task
 - [!] #3 Blocked task
 
@@ -77,11 +78,13 @@ Statuses: `[ ]` open, `[~]` in progress, `[!]` blocked, `[x]` done (archived)
 Priority: global across client, auto-repacked on every write (consecutive, no gaps)
 Due dates: DD.MM.YYYY format
 Recurrence: `[every monday]`, `[every weekly]`, `[every 3 months]` etc
+`for`: optional — who the task was promised to (commitment tracking)
+`since`: creation date, stamped automatically on every new task (used for staleness in `/review`)
 
 Archive file is a flat list:
 ```markdown
 # Client Name — Archive
-- [x] Task text [due 15.05.2026] [completed 10.05.2026]
+- [x] Task text [due 15.05.2026] [for Sarah] [completed 10.05.2026]
 ```
 
 ### Inference
@@ -97,7 +100,11 @@ The model returns a JSON array of operations:
 ```
 
 Supported actions: add, edit, complete, start, block, reset, reprioritise, move,
-due, recur, create_focus, rename_focus, archive_focus, list, status, none
+due, recur, for, create_focus, rename_focus, archive_focus, list, status, none
+
+`/report [days]` and `/review` are explicit-only commands (not inference actions) —
+a client status update and an interactive overdue/stale/blocked triage walkthrough,
+scoped to the current client.
 
 ---
 
@@ -176,7 +183,7 @@ Two test suites, both run automatically by `deploy.sh`:
 
 **test_tasks_core.py** — tests for tasks_core.py:
 - TestInit, TestListClients, TestLastClient
-- TestParseTaskFile, TestWriteTaskFile, TestArchiveTask
+- TestParseTaskFile, TestWriteTaskFile, TestArchiveTask, TestParseArchiveFile
 - TestNextRecurDate (all patterns + edge cases)
 
 **test_tasks.py** — tests for tasks.py:
@@ -184,6 +191,7 @@ Two test suites, both run automatically by `deploy.sh`:
 - TestCompleteTask (including recurrence)
 - TestTaskMutations, TestReprioritise, TestFocusOperations
 - TestListClients, TestMockedInference, TestPhotoTask
+- TestReport, TestReview
 
 Run locally:
 ```bash

@@ -46,6 +46,16 @@ Version history:
          tasks.py, photo_task.py, voice_dump.py all import from tasks_core
          No more duplicated parse/write/archive code
     4.2  Removed duplicate add_task() definition (identical copy, dead code)
+    4.3  Commitment tracking — [for Name] task tag for who a task was promised
+         to, plus automatic [since DATE] creation stamp on every new task.
+         /task for <#> <name>, /task for <#> clear, "for" inference action.
+         Shown in task list and folded into the Commitments status section.
+    4.4  Client status reports — /report [days] generates a plain-text
+         completed/in-progress/blocked summary from the archive + open tasks,
+         printed and saved to reports/<client>_<date>.md
+    4.5  Weekly review — /review walks overdue, stale (>14d open, no due date),
+         and blocked tasks for the current client one at a time with inline
+         triage actions (done/start/block/reset/update due/keep/quit)
 
 Requirements:
     pip install requests rich prompt_toolkit
@@ -54,7 +64,7 @@ Usage:
     python tasks.py
 """
 
-VERSION = "4.2"
+VERSION = "4.5"
 
 import os
 import re
@@ -186,7 +196,8 @@ def display_tasks(client: str, focus_filter: str | None = None):
             colour = STATUS_COLOUR.get(status, "white")
             label = STATUS_LABEL.get(status, "")
             recur = f" [dim][↻ {t['recur']}][/dim]" if t.get("recur") else ""
-            lines.append(f"  [{colour}]#{t['priority']} {t['text']}[/{colour}]{label}{due_display(t)}{recur}")
+            for_tag = f" [magenta][for {t['for']}][/magenta]" if t.get("for") else ""
+            lines.append(f"  [{colour}]#{t['priority']} {t['text']}[/{colour}]{label}{due_display(t)}{recur}{for_tag}")
         lines.append("")
 
     console.print(Panel("\n".join(lines).strip(), title=f"{client} — Tasks", border_style="blue"))
@@ -207,12 +218,17 @@ def display_status(client: str):
         due = f" [due {t['due']}]" if t.get("due") else ""
         lines.append(f"  [cyan]#{t['priority']}[/cyan] [{t['focus']}] {t['text']}{due}")
 
-    # Commitments — tasks with due dates, sorted by urgency
-    commitments = [t for t in open_tasks if t.get("due")]
+    # Commitments — tasks with a due date and/or promised to someone
+    commitments = [t for t in open_tasks if t.get("due") or t.get("for")]
     if commitments:
-        commitments.sort(key=lambda t: datetime.strptime(t["due"], DATE_FMT) if t.get("due") else datetime.max)
+        dated = [t for t in commitments if t.get("due")]
+        undated = [t for t in commitments if not t.get("due")]
+        dated.sort(key=lambda t: datetime.strptime(t["due"], DATE_FMT) if t.get("due") else datetime.max)
+        undated.sort(key=lambda t: t.get("for") or "")
         lines.append("\n[bold]Commitments[/bold]")
-        for t in commitments:
+        for t in dated:
+            recur = f" [dim][↻ {t['recur']}][/dim]" if t.get("recur") else ""
+            for_tag = f" [magenta](for {t['for']})[/magenta]" if t.get("for") else ""
             try:
                 due_date = datetime.strptime(t["due"], DATE_FMT)
                 days = (due_date - today).days
@@ -226,10 +242,11 @@ def display_status(client: str):
                     marker = f"[yellow]in {days}d[/yellow]"
                 else:
                     marker = f"[cyan]{t['due']}[/cyan]"
-                recur = f" [dim][↻ {t['recur']}][/dim]" if t.get("recur") else ""
-                lines.append(f"  [dim]#{t['priority']}[/dim] {t['text']} {marker}{recur}")
+                lines.append(f"  [dim]#{t['priority']}[/dim] {t['text']} {marker}{recur}{for_tag}")
             except ValueError:
-                lines.append(f"  [dim]#{t['priority']}[/dim] {t['text']} [cyan]{t['due']}[/cyan]")
+                lines.append(f"  [dim]#{t['priority']}[/dim] {t['text']} [cyan]{t['due']}[/cyan]{recur}{for_tag}")
+        for t in undated:
+            lines.append(f"  [dim]#{t['priority']}[/dim] {t['text']} [magenta]for {t['for']}[/magenta]")
 
     # Blocked tasks
     blocked = [t for t in open_tasks if t.get("status") == "blocked"]
@@ -249,7 +266,8 @@ def display_status(client: str):
 
 # ── Direct task operations ────────────────────────────────────────────────────
 
-def add_task(client: str, text: str, focus: str = "General", due: str | None = None, recur: str | None = None):
+def add_task(client: str, text: str, focus: str = "General", due: str | None = None,
+             recur: str | None = None, for_person: str | None = None):
     data = parse_task_file(client)
     open_tasks = [t for t in data["tasks"] if not t["done"]]
     next_pri = max((t["priority"] for t in open_tasks), default=0) + 1
@@ -263,13 +281,16 @@ def add_task(client: str, text: str, focus: str = "General", due: str | None = N
         "text": text,
         "due": due,
         "recur": recur,
+        "for": for_person,
+        "since": datetime.now().strftime(DATE_FMT),
         "done": False,
         "status": "open",
     })
     write_task_file(client, data)
     recur_str = f" [↻ {recur}]" if recur else ""
-    log("info", f"Task added: [{focus}] #{next_pri} {text}{recur_str}")
-    console.print(f"[green]✓ Added #{next_pri}: {text}{recur_str}[/green]")
+    for_str = f" [for {for_person}]" if for_person else ""
+    log("info", f"Task added: [{focus}] #{next_pri} {text}{recur_str}{for_str}")
+    console.print(f"[green]✓ Added #{next_pri}: {text}{recur_str}{for_str}[/green]")
 
 
 def complete_task(client: str, priority: int):
@@ -301,6 +322,8 @@ def complete_task(client: str, priority: int):
             "text": match["text"],
             "due": next_due,
             "recur": match["recur"],
+            "for": match.get("for"),
+            "since": datetime.now().strftime(DATE_FMT),
             "done": False,
             "status": "open",
         }
@@ -387,6 +410,20 @@ def set_recur(client: str, priority: int, recur: str | None):
     console.print(f"[green]✓ Recurrence {label} for #{priority}[/green]")
 
 
+def set_for(client: str, priority: int, for_person: str | None):
+    """Set or clear who a task was promised to."""
+    data = parse_task_file(client)
+    open_tasks = [t for t in data["tasks"] if not t["done"]]
+    match = next((t for t in open_tasks if t["priority"] == priority), None)
+    if not match:
+        console.print(f"[yellow]No task #{priority}[/yellow]")
+        return
+    match["for"] = for_person
+    write_task_file(client, data)
+    label = f"for {for_person}" if for_person else "cleared"
+    console.print(f"[green]✓ #{priority} {label}[/green]")
+
+
 def create_focus(client: str, focus: str, description: str = ""):
     data = parse_task_file(client)
     if focus in data["focuses"]:
@@ -466,7 +503,7 @@ Determine what task operation(s) the user wants. Return a JSON array of operatio
 Each operation is an object with an "action" field and relevant parameters.
 
 Available actions:
-- add: {{"action": "add", "text": "task description", "focus": "General", "due": "15.05.2026" or null, "recur": "monday" or "weekly" or "monthly" or null, "priority": {next_pri}}}
+- add: {{"action": "add", "text": "task description", "focus": "General", "due": "15.05.2026" or null, "recur": "monday" or "weekly" or "monthly" or null, "for": "Sarah" or null, "priority": {next_pri}}}
 - edit: {{"action": "edit", "priority": 3, "text": "updated task description"}}
 - complete: {{"action": "complete", "priority": 3}}
 - start: {{"action": "start", "priority": 3}}
@@ -476,6 +513,7 @@ Available actions:
 - move: {{"action": "move", "priority": 3, "focus": "New Focus"}}
 - due: {{"action": "due", "priority": 3, "due": "15.05.2026" or null}}
 - recur: {{"action": "recur", "priority": 3, "recur": "monday" or "weekly" or "monthly" or null}}
+- for: {{"action": "for", "priority": 3, "for": "Sarah" or null}}
 - create_focus: {{"action": "create_focus", "focus": "New Focus Name"}}
 - rename_focus: {{"action": "rename_focus", "old": "Old Name", "new": "New Name"}}
 - archive_focus: {{"action": "archive_focus", "focus": "Focus Name"}}
@@ -484,6 +522,11 @@ Available actions:
 - none: {{"action": "none", "response": "conversational reply to user"}}
 
 Supported recurrence values: daily, weekly, fortnightly, monthly, monday, tuesday, wednesday, thursday, friday, saturday, sunday
+
+The "for" field is the person a task was promised to — extract a name from phrases
+like "for Sarah", "Sarah asked me to...", "promised John I'd...". Leave it null if
+no specific person is mentioned. Use the "for" action to set or clear it on an
+existing task (pass "for": null to clear).
 
 For voice dumps or multiple tasks mentioned, return multiple add operations.
 If the user is just chatting or asking a question, use "none" with a helpful response.
@@ -584,7 +627,10 @@ def execute_operations(client: str, operations: list):
         action = op.get("action")
 
         if action == "add":
-            add_task(client, op["text"], op.get("focus", "General"), op.get("due"), op.get("recur"))
+            add_task(client, op["text"], op.get("focus", "General"), op.get("due"),
+                      op.get("recur"), op.get("for"))
+        elif action == "for":
+            set_for(client, int(op["priority"]), op.get("for"))
         elif action == "complete":
             complete_task(client, int(op["priority"]))
         elif action == "start":
@@ -632,6 +678,176 @@ def edit_task(client: str, priority: int, new_text: str):
     write_task_file(client, data)
     log("info", f"Task #{priority} edited: '{old_text}' → '{new_text}'")
     console.print(f"[green]✓ #{priority} updated[/green]")
+
+
+# ── Reports & review ──────────────────────────────────────────────────────────
+
+STALE_DAYS = 14
+
+
+def generate_report(client: str, days: int = 7) -> str:
+    """Build a plain-text client status update from completed/in-progress/blocked tasks."""
+    today = datetime.now()
+    cutoff = today - timedelta(days=days)
+
+    archive = core.parse_archive_file(client)
+    completed = []
+    for entry in archive:
+        try:
+            completed_date = datetime.strptime(entry["completed"], DATE_FMT)
+        except (ValueError, TypeError):
+            continue
+        if completed_date >= cutoff:
+            completed.append(entry)
+
+    data = parse_task_file(client)
+    open_tasks = [t for t in data["tasks"] if not t["done"]]
+    in_progress = [t for t in open_tasks if t.get("status") == "in_progress"]
+    blocked = [t for t in open_tasks if t.get("status") == "blocked"]
+
+    lines = [f"# {client.replace('_', ' ').title()} — Status Update ({today.strftime(DATE_FMT)})", ""]
+
+    lines.append("## Completed this week" if days == 7 else f"## Completed (last {days} days)")
+    if completed:
+        for entry in completed:
+            for_str = f" (for {entry['for']})" if entry.get("for") else ""
+            lines.append(f"- {entry['text']}{for_str}")
+    else:
+        lines.append("- (nothing completed in this period)")
+    lines.append("")
+
+    lines.append("## In progress")
+    if in_progress:
+        for t in in_progress:
+            for_str = f" (for {t['for']})" if t.get("for") else ""
+            lines.append(f"- {t['text']}{for_str}")
+    else:
+        lines.append("- (nothing in progress)")
+    lines.append("")
+
+    lines.append("## Blocked")
+    if blocked:
+        for t in blocked:
+            for_str = f" (for {t['for']})" if t.get("for") else ""
+            lines.append(f"- {t['text']}{for_str}")
+    else:
+        lines.append("- (nothing blocked)")
+
+    return "\n".join(lines) + "\n"
+
+
+def save_report(client: str, report: str) -> Path:
+    reports_dir = BASE_DIR / "reports"
+    reports_dir.mkdir(parents=True, exist_ok=True)
+    path = reports_dir / f"{client}_{datetime.now().strftime('%Y%m%d')}.md"
+    path.write_text(report)
+    return path
+
+
+def build_review_queue(client: str) -> dict:
+    """Categorise open tasks for the weekly review: overdue, stale, blocked, empty focuses."""
+    data = parse_task_file(client)
+    open_tasks = [t for t in data["tasks"] if not t["done"]]
+    today = datetime.now()
+
+    overdue = []
+    for t in open_tasks:
+        if not t.get("due"):
+            continue
+        try:
+            due_date = datetime.strptime(t["due"], DATE_FMT)
+        except ValueError:
+            continue
+        if due_date < today:
+            overdue.append(t)
+    overdue.sort(key=lambda t: t["due"])
+
+    stale = []
+    for t in open_tasks:
+        if t.get("due"):
+            continue
+        since = t.get("since")
+        if not since:
+            stale.append(t)  # predates 'since' tracking — age unknown, worth a look
+            continue
+        try:
+            since_date = datetime.strptime(since, DATE_FMT)
+        except ValueError:
+            stale.append(t)
+            continue
+        if (today - since_date).days >= STALE_DAYS:
+            stale.append(t)
+    stale.sort(key=lambda t: t.get("since") or "")
+
+    blocked = [t for t in open_tasks if t.get("status") == "blocked"]
+
+    focuses_with_tasks = {t["focus"] for t in open_tasks}
+    empty_focuses = [f for f in data["focuses"] if f not in focuses_with_tasks]
+
+    return {"overdue": overdue, "stale": stale, "blocked": blocked, "empty_focuses": empty_focuses}
+
+
+def _find_open_task(client: str, focus: str, text: str) -> dict | None:
+    """Re-look-up an open task by focus+text — priorities shift on every write_task_file call."""
+    data = parse_task_file(client)
+    return next((t for t in data["tasks"] if not t["done"] and t["focus"] == focus and t["text"] == text), None)
+
+
+def review_client(client: str):
+    """Interactive walkthrough of overdue, stale, and blocked tasks for one client."""
+    queue = build_review_queue(client)
+
+    seen = set()
+    reasons = {}
+    ordered = []
+    for reason, tasks in (("overdue", queue["overdue"]), ("stale", queue["stale"]), ("blocked", queue["blocked"])):
+        for t in tasks:
+            key = (t["focus"], t["text"])
+            if key in seen:
+                reasons[key] = reasons[key] + f", {reason}"
+                continue
+            seen.add(key)
+            reasons[key] = reason
+            ordered.append(t)
+
+    if not ordered:
+        console.print("[green]Nothing overdue, stale, or blocked. Clean sweep.[/green]")
+    else:
+        console.print(f"[bold]Weekly review — {len(ordered)} task(s) to triage[/bold]\n")
+        for t in ordered:
+            # Priorities get repacked on every mutation — re-resolve by focus+text
+            # rather than trusting the priority captured when the queue was built.
+            current = _find_open_task(client, t["focus"], t["text"])
+            if not current:
+                continue  # already resolved (e.g. completed elsewhere in this loop)
+
+            reason = reasons[(t["focus"], t["text"])]
+            due = f" [due {current['due']}]" if current.get("due") else ""
+            for_str = f" [for {current['for']}]" if current.get("for") else ""
+            console.print(f"[bold]#{current['priority']}[/bold] {current['text']}{due}{for_str}  [dim]({reason})[/dim]")
+            choice = Prompt.ask(
+                "  [d]one / [s]tart / [b]lock / [r]eset / [u]pdate due / [k]eep / [q]uit",
+                default="k"
+            ).strip().lower()
+
+            pri = current["priority"]
+            if choice == "d":
+                complete_task(client, pri)
+            elif choice == "s":
+                set_task_status(client, pri, "in_progress")
+            elif choice == "b":
+                set_task_status(client, pri, "blocked")
+            elif choice == "r":
+                set_task_status(client, pri, "open")
+            elif choice == "u":
+                new_due = Prompt.ask("  New due date (DD.MM.YYYY, blank to clear)", default="").strip()
+                set_due_date(client, pri, new_due or None)
+            elif choice == "q":
+                break
+            # "k" or anything else — leave as is, move on
+
+    if queue["empty_focuses"]:
+        console.print(f"\n[bold]Focuses with no tasks[/bold]\n  " + ", ".join(queue["empty_focuses"]))
 
 
 # ── Voice ─────────────────────────────────────────────────────────────────────
@@ -732,11 +948,15 @@ def show_help():
         "/task recur <#> <pattern> — set recurrence (daily/weekly/monthly/monday etc)\n"
         "/task recur <#> clear     — remove recurrence\n"
         "/task due <#> clear       — remove due date\n"
+        "/task for <#> <name>      — mark who a task was promised to\n"
+        "/task for <#> clear       — remove the 'for' tag\n"
         "/focus new <name>         — create focus\n"
         "/focus list               — list focuses\n"
         "/focus rename <old> <new> — rename focus\n"
         "/focus archive <name>     — archive focus\n"
         "/status                   — top priorities, due soon, empty focuses\n"
+        "/report [days]            — client status update from completed/in-progress/blocked (default 7 days)\n"
+        "/review                   — walk through overdue, stale, and blocked tasks one at a time\n"
         "/switch                   — change client\n"
         "/voice                    — tap to start recording, tap again to stop and process\n"
         "/photo [path]             — extract tasks from latest screenshot (or specified image)\n"
@@ -824,6 +1044,19 @@ def main():
                     except Exception as e:
                         console.print(f"[yellow]Photo processing failed: {e}[/yellow]")
 
+            elif cmd == "/report":
+                try:
+                    days = int(arg1) if arg1 else 7
+                except ValueError:
+                    days = 7
+                report = generate_report(client, days)
+                print(report)
+                path = save_report(client, report)
+                console.print(f"[dim]Saved to {path}[/dim]")
+
+            elif cmd == "/review":
+                review_client(client)
+
             elif cmd == "/local":
                 force_local = not force_local
                 state = "on — using local Ollama" if force_local else "off — using Anthropic"
@@ -861,22 +1094,27 @@ def main():
             elif cmd == "/task":
                 subcmd = arg1.lower()
                 if subcmd == "add":
-                    # Parse: /task add <text> [focus:<name>] [due:DD.MM.YYYY]
+                    # Parse: /task add <text> [focus:<name>] [due:DD.MM.YYYY] [for:<name>]
                     text = arg2
                     focus = "General"
                     due = None
+                    for_person = None
                     focus_match = re.search(r'focus:(\S+)', text)
                     due_match = re.search(r'due:([\d.]+)', text)
+                    for_match = re.search(r'for:(\S+)', text)
                     if focus_match:
                         focus = focus_match.group(1)
                         text = text.replace(focus_match.group(0), "").strip()
                     if due_match:
                         due = due_match.group(1)
                         text = text.replace(due_match.group(0), "").strip()
+                    if for_match:
+                        for_person = for_match.group(1)
+                        text = text.replace(for_match.group(0), "").strip()
                     if text:
-                        add_task(client, text, focus, due)
+                        add_task(client, text, focus, due, for_person=for_person)
                     else:
-                        console.print("[yellow]Usage: /task add <description> [focus:<name>] [due:DD.MM.YYYY][/yellow]")
+                        console.print("[yellow]Usage: /task add <description> [focus:<name>] [due:DD.MM.YYYY] [for:<name>][/yellow]")
                 elif subcmd == "list":
                     display_tasks(client, arg2 or None)
                 elif subcmd == "start":
@@ -956,8 +1194,20 @@ def main():
                             console.print("[yellow]Usage: /task due <#> <DD.MM.YYYY> or /task due <#> clear[/yellow]")
                     else:
                         console.print("[yellow]Usage: /task due <#> <DD.MM.YYYY> or /task due <#> clear[/yellow]")
+                elif subcmd == "for":
+                    nums = arg2.split(maxsplit=1)
+                    if len(nums) == 2:
+                        try:
+                            pri = int(nums[0])
+                            name_arg = nums[1].strip()
+                            for_person = None if name_arg.lower() == "clear" else name_arg
+                            set_for(client, pri, for_person)
+                        except ValueError:
+                            console.print("[yellow]Usage: /task for <#> <name> or /task for <#> clear[/yellow]")
+                    else:
+                        console.print("[yellow]Usage: /task for <#> <name> or /task for <#> clear[/yellow]")
                 else:
-                    console.print("[yellow]Usage: /task list|done|pri|move|due[/yellow]")
+                    console.print("[yellow]Usage: /task list|done|pri|move|due|for[/yellow]")
 
             elif cmd == "/focus":
                 subcmd = arg1.lower()

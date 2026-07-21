@@ -169,6 +169,21 @@ class TestParseTaskFile(unittest.TestCase):
         self.assertEqual(t["due"], "01.06.2026")
         self.assertEqual(t["text"], "Task")
 
+    def test_parses_for_and_since(self):
+        data = self._write(
+            "# T\n\n## General\n- [ ] #1 Task [due 01.06.2026] [for Sarah] [since 20.05.2026]\n"
+        )
+        t = data["tasks"][0]
+        self.assertEqual(t["for"], "Sarah")
+        self.assertEqual(t["since"], "20.05.2026")
+        self.assertEqual(t["text"], "Task")
+
+    def test_for_and_since_default_none(self):
+        data = self._write("# T\n\n## General\n- [ ] #1 Task\n")
+        t = data["tasks"][0]
+        self.assertIsNone(t["for"])
+        self.assertIsNone(t["since"])
+
     def test_parses_focus_description(self):
         data = self._write("# T\n\n## Platform\n<!-- Platform team support -->\n- [ ] #1 A\n")
         self.assertEqual(data["descriptions"]["Platform"], "Platform team support")
@@ -254,9 +269,11 @@ class TestWriteTaskFile(unittest.TestCase):
             "descriptions": {"Platform": "Desc"},
             "tasks": [
                 {"priority": 1, "focus": "General", "text": "Task A",
-                 "due": "15.06.2026", "recur": "weekly", "done": False, "status": "open"},
+                 "due": "15.06.2026", "recur": "weekly", "for": "Sarah",
+                 "since": "01.06.2026", "done": False, "status": "open"},
                 {"priority": 2, "focus": "Platform", "text": "Task B",
-                 "due": None, "recur": None, "done": False, "status": "blocked"},
+                 "due": None, "recur": None, "for": None, "since": None,
+                 "done": False, "status": "blocked"},
             ]
         }
         C.write_task_file("test", original)
@@ -271,6 +288,8 @@ class TestWriteTaskFile(unittest.TestCase):
             self.assertEqual(o["text"], p["text"])
             self.assertEqual(o["due"], p["due"])
             self.assertEqual(o["recur"], p["recur"])
+            self.assertEqual(o["for"], p["for"])
+            self.assertEqual(o["since"], p["since"])
             self.assertEqual(o["status"], p["status"])
 
 
@@ -304,6 +323,54 @@ class TestArchiveTask(unittest.TestCase):
         content = C.archive_file("test").read_text()
         self.assertIn("Task A", content)
         self.assertIn("Task B", content)
+
+    def test_includes_for_tag(self):
+        task = {"text": "Do thing", "due": None, "for": "Sarah"}
+        C.archive_task("test", task)
+        content = C.archive_file("test").read_text()
+        self.assertIn("[for Sarah]", content)
+
+    def test_omits_for_tag_when_absent(self):
+        task = {"text": "Do thing", "due": None}
+        C.archive_task("test", task)
+        content = C.archive_file("test").read_text()
+        self.assertNotIn("[for", content)
+
+
+# ── parse_archive_file ───────────────────────────────────────────────────────
+
+class TestParseArchiveFile(unittest.TestCase):
+
+    def setUp(self):
+        _init(f"parcarc_{self._testMethodName}")
+
+    def test_missing_file_returns_empty(self):
+        self.assertEqual(C.parse_archive_file("nonexistent"), [])
+
+    def test_parses_completed_task(self):
+        C.archive_task("test", {"text": "Do thing", "due": "15.06.2026", "for": "Sarah"})
+        entries = C.parse_archive_file("test")
+        self.assertEqual(len(entries), 1)
+        e = entries[0]
+        self.assertEqual(e["text"], "Do thing")
+        self.assertEqual(e["due"], "15.06.2026")
+        self.assertEqual(e["for"], "Sarah")
+        self.assertIsNotNone(e["completed"])
+
+    def test_parses_task_without_due_or_for(self):
+        C.archive_task("test", {"text": "Simple task", "due": None})
+        entries = C.parse_archive_file("test")
+        self.assertEqual(entries[0]["text"], "Simple task")
+        self.assertIsNone(entries[0]["due"])
+        self.assertIsNone(entries[0]["for"])
+
+    def test_multiple_entries(self):
+        C.archive_task("test", {"text": "Task A", "due": None})
+        C.archive_task("test", {"text": "Task B", "due": None})
+        entries = C.parse_archive_file("test")
+        self.assertEqual(len(entries), 2)
+        self.assertEqual(entries[0]["text"], "Task A")
+        self.assertEqual(entries[1]["text"], "Task B")
 
 
 # ── next_recur_date ───────────────────────────────────────────────────────────

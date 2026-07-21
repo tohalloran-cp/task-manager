@@ -12,9 +12,13 @@ Version history:
          client_file, archive_file, list_clients
          load_last_client, save_last_client
          next_recur_date
+    1.1  Added [for Name] (who a task was promised to) and [since DATE]
+         (creation date) task tags — parsed, written, and carried into
+         the archive line on completion (for only, not since)
+         Added parse_archive_file() to read completed-task history
 """
 
-VERSION = "1.0"
+VERSION = "1.1"
 
 import re
 import calendar
@@ -120,14 +124,22 @@ def parse_task_file(client: str) -> dict:
             due = due_match.group(1) if due_match else None
             recur_match = re.search(r"\[every ([^\]]+)\]", rest)
             recur = recur_match.group(1).strip() if recur_match else None
+            for_match = re.search(r"\[for ([^\]]+)\]", rest)
+            for_person = for_match.group(1).strip() if for_match else None
+            since_match = re.search(r"\[since ([\d.]+)\]", rest)
+            since = since_match.group(1) if since_match else None
             text = re.sub(r"\s*\[due [\d.]+\]", "", rest)
-            text = re.sub(r"\s*\[every [^\]]+\]", "", text).strip()
+            text = re.sub(r"\s*\[every [^\]]+\]", "", text)
+            text = re.sub(r"\s*\[for [^\]]+\]", "", text)
+            text = re.sub(r"\s*\[since [\d.]+\]", "", text).strip()
             tasks.append({
                 "priority": priority,
                 "focus": current_focus,
                 "text": text,
                 "due": due,
                 "recur": recur,
+                "for": for_person,
+                "since": since,
                 "done": done,
                 "status": status,
             })
@@ -163,7 +175,9 @@ def write_task_file(client: str, data: dict):
             marker = MARKERS.get(task.get("status", "open"), " ")
             due_str = f" [due {task['due']}]" if task.get("due") else ""
             recur_str = f" [every {task['recur']}]" if task.get("recur") else ""
-            lines.append(f"- [{marker}] #{task['priority']} {task['text']}{due_str}{recur_str}")
+            for_str = f" [for {task['for']}]" if task.get("for") else ""
+            since_str = f" [since {task['since']}]" if task.get("since") else ""
+            lines.append(f"- [{marker}] #{task['priority']} {task['text']}{due_str}{recur_str}{for_str}{since_str}")
         lines.append("")
 
     client_file(client).write_text("\n".join(lines))
@@ -177,9 +191,34 @@ def archive_task(client: str, task: dict):
         arc.write_text(f"# {client.replace('_', ' ').title()} — Archive\n\n")
     today = datetime.now().strftime(DATE_FMT)
     due_str = f" [due {task['due']}]" if task.get("due") else ""
-    line = f"- [x] {task['text']}{due_str} [completed {today}]\n"
+    for_str = f" [for {task['for']}]" if task.get("for") else ""
+    line = f"- [x] {task['text']}{due_str}{for_str} [completed {today}]\n"
     with arc.open("a") as f:
         f.write(line)
+
+
+def parse_archive_file(client: str) -> list[dict]:
+    """Parse a client's archive file into a list of completed tasks."""
+    _require_init()
+    arc = archive_file(client)
+    if not arc.exists():
+        return []
+
+    pattern = re.compile(
+        r"^- \[x\] (.+?)(?: \[due ([\d.]+)\])?(?: \[for ([^\]]+)\])? \[completed ([\d.]+)\]$"
+    )
+    entries = []
+    for line in arc.read_text().splitlines():
+        match = pattern.match(line)
+        if match:
+            text, due, for_person, completed = match.groups()
+            entries.append({
+                "text": text.strip(),
+                "due": due,
+                "for": for_person,
+                "completed": completed,
+            })
+    return entries
 
 
 # ── Recurrence ────────────────────────────────────────────────────────────────

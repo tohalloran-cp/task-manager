@@ -320,6 +320,16 @@ class TestAddTask(unittest.TestCase):
         self.assertEqual(t["due"], "02.06.2026")
         self.assertEqual(t["recur"], "monday")
 
+    def test_add_stamps_since(self):
+        T.add_task(self.client, "Fresh task")
+        data = T.parse_task_file(self.client)
+        self.assertEqual(data["tasks"][0]["since"], datetime.now().strftime(T.DATE_FMT))
+
+    def test_add_with_for(self):
+        T.add_task(self.client, "Promised task", for_person="Sarah")
+        data = T.parse_task_file(self.client)
+        self.assertEqual(data["tasks"][0]["for"], "Sarah")
+
 
 class TestCompleteTask(unittest.TestCase):
     """complete_task — archiving and recurrence."""
@@ -366,6 +376,21 @@ class TestCompleteTask(unittest.TestCase):
         data = T.parse_task_file(self.client)
         open_tasks = [t for t in data["tasks"] if not t["done"]]
         self.assertEqual(open_tasks[0]["due"], "15.06.2026")
+
+    def test_complete_carries_for_to_archive(self):
+        T.add_task(self.client, "Promised task", for_person="Sarah")
+        with patch.object(T, "display_tasks"):
+            T.complete_task(self.client, 1)
+        archive = T.archive_file(self.client)
+        self.assertIn("[for Sarah]", archive.read_text())
+
+    def test_recurring_carries_for(self):
+        T.add_task(self.client, "Weekly promise", due="02.06.2026", recur="weekly", for_person="Sarah")
+        with patch.object(T, "display_tasks"):
+            T.complete_task(self.client, 1)
+        data = T.parse_task_file(self.client)
+        open_tasks = [t for t in data["tasks"] if not t["done"]]
+        self.assertEqual(open_tasks[0]["for"], "Sarah")
 
     def test_recurring_goes_to_bottom(self):
         T.add_task(self.client, "Task A")
@@ -446,6 +471,19 @@ class TestTaskMutations(unittest.TestCase):
         data = T.parse_task_file(self.client)
         match = next(t for t in data["tasks"] if t["priority"] == 1)
         self.assertIsNone(match["recur"])
+
+    def test_set_for(self):
+        T.set_for(self.client, 1, "Sarah")
+        data = T.parse_task_file(self.client)
+        match = next(t for t in data["tasks"] if t["priority"] == 1)
+        self.assertEqual(match["for"], "Sarah")
+
+    def test_clear_for(self):
+        T.set_for(self.client, 1, "Sarah")
+        T.set_for(self.client, 1, None)
+        data = T.parse_task_file(self.client)
+        match = next(t for t in data["tasks"] if t["priority"] == 1)
+        self.assertIsNone(match["for"])
 
 
 class TestReprioritise(unittest.TestCase):
@@ -585,6 +623,15 @@ class TestMockedInference(unittest.TestCase):
                     result = T.run_inference(self.client, "Task 1 is done")
         self.assertEqual(result[0]["action"], "complete")
 
+    def test_for_action_via_inference(self):
+        ops = [{"action": "for", "priority": 1, "for": "Sarah"}]
+        with patch("requests.post", return_value=self._mock_response(ops)):
+            with patch.object(T, "is_online", return_value=True):
+                T.force_local = False
+                result = T.run_inference(self.client, "Task 1 is for Sarah")
+        self.assertEqual(result[0]["action"], "for")
+        self.assertEqual(result[0]["for"], "Sarah")
+
     def test_offline_falls_back_to_ollama(self):
         ollama_resp = MagicMock()
         ollama_resp.ok = True
@@ -652,6 +699,123 @@ class TestPhotoTask(unittest.TestCase):
         self.assertIn("No tasks found", summary)
         data = T.parse_task_file(self.client)
         self.assertEqual(len(data["tasks"]), 0)
+
+
+class TestReport(unittest.TestCase):
+    """generate_report — completed/in-progress/blocked summary."""
+
+    def setUp(self):
+        self.tmp = _TMPDIR / "report"
+        self.tmp.mkdir(exist_ok=True)
+        _set_tmp_dirs(self.tmp)
+        self.client = f"test_{self._testMethodName}"
+
+    def _archive_with_completed_date(self, text: str, completed: str, for_person=None):
+        for_str = f" [for {for_person}]" if for_person else ""
+        line = f"- [x] {text}{for_str} [completed {completed}]\n"
+        arc = T.archive_file(self.client)
+        if not arc.exists():
+            arc.write_text(f"# {self.client.title()} — Archive\n\n")
+        with arc.open("a") as f:
+            f.write(line)
+
+    def test_includes_recently_completed(self):
+        today = datetime.now()
+        recent = (today - timedelta(days=2)).strftime(T.DATE_FMT)
+        self._archive_with_completed_date("Recent task", recent)
+        report = T.generate_report(self.client, days=7)
+        self.assertIn("Recent task", report)
+
+    def test_excludes_old_completed(self):
+        today = datetime.now()
+        old = (today - timedelta(days=30)).strftime(T.DATE_FMT)
+        self._archive_with_completed_date("Old task", old)
+        report = T.generate_report(self.client, days=7)
+        self.assertNotIn("Old task", report)
+
+    def test_includes_for_annotation(self):
+        today = datetime.now()
+        recent = (today - timedelta(days=1)).strftime(T.DATE_FMT)
+        self._archive_with_completed_date("Promised task", recent, for_person="Sarah")
+        report = T.generate_report(self.client, days=7)
+        self.assertIn("Promised task (for Sarah)", report)
+
+    def test_includes_in_progress_and_blocked(self):
+        T.add_task(self.client, "In flight")
+        T.set_task_status(self.client, 1, "in_progress")
+        T.add_task(self.client, "Stuck")
+        T.set_task_status(self.client, 2, "blocked")
+        report = T.generate_report(self.client, days=7)
+        self.assertIn("## In progress", report)
+        self.assertIn("In flight", report)
+        self.assertIn("## Blocked", report)
+        self.assertIn("Stuck", report)
+
+    def test_save_report_writes_file(self):
+        report = T.generate_report(self.client, days=7)
+        path = T.save_report(self.client, report)
+        self.assertTrue(path.exists())
+        self.assertEqual(path.read_text(), report)
+
+
+class TestReview(unittest.TestCase):
+    """build_review_queue — overdue/stale/blocked/empty-focus classification."""
+
+    def setUp(self):
+        self.tmp = _TMPDIR / "review"
+        self.tmp.mkdir(exist_ok=True)
+        _set_tmp_dirs(self.tmp)
+        self.client = f"test_{self._testMethodName}"
+
+    def test_overdue_task_included(self):
+        T.add_task(self.client, "Late task", due="01.01.2020")
+        queue = T.build_review_queue(self.client)
+        self.assertEqual(len(queue["overdue"]), 1)
+        self.assertEqual(queue["overdue"][0]["text"], "Late task")
+
+    def test_future_due_not_overdue(self):
+        future = (datetime.now() + timedelta(days=30)).strftime(T.DATE_FMT)
+        T.add_task(self.client, "Future task", due=future)
+        queue = T.build_review_queue(self.client)
+        self.assertEqual(len(queue["overdue"]), 0)
+
+    def test_stale_task_no_due_old_since(self):
+        T.add_task(self.client, "Old undated task")
+        data = T.parse_task_file(self.client)
+        old_since = (datetime.now() - timedelta(days=30)).strftime(T.DATE_FMT)
+        data["tasks"][0]["since"] = old_since
+        T.write_task_file(self.client, data)
+        queue = T.build_review_queue(self.client)
+        self.assertEqual(len(queue["stale"]), 1)
+
+    def test_recent_undated_task_not_stale(self):
+        T.add_task(self.client, "New undated task")
+        queue = T.build_review_queue(self.client)
+        self.assertEqual(len(queue["stale"]), 0)
+
+    def test_missing_since_treated_as_stale(self):
+        T.add_task(self.client, "Legacy task")
+        data = T.parse_task_file(self.client)
+        data["tasks"][0]["since"] = None
+        T.write_task_file(self.client, data)
+        queue = T.build_review_queue(self.client)
+        self.assertEqual(len(queue["stale"]), 1)
+
+    def test_blocked_task_included(self):
+        T.add_task(self.client, "Stuck task")
+        T.set_task_status(self.client, 1, "blocked")
+        queue = T.build_review_queue(self.client)
+        self.assertEqual(len(queue["blocked"]), 1)
+
+    def test_empty_focus_included(self):
+        T.create_focus(self.client, "Empty Focus")
+        queue = T.build_review_queue(self.client)
+        self.assertIn("Empty Focus", queue["empty_focuses"])
+
+    def test_focus_with_task_not_empty(self):
+        T.add_task(self.client, "A task", focus="Platform")
+        queue = T.build_review_queue(self.client)
+        self.assertNotIn("Platform", queue["empty_focuses"])
 
 
 # ── Runner ────────────────────────────────────────────────────────────────────
