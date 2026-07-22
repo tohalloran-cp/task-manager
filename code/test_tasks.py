@@ -52,17 +52,18 @@ import tasks as T
 import tasks_core as C
 
 def _set_tmp_dirs(tmp: Path):
-    """Redirect tasks module file paths to tmp directory."""
+    """Redirect tasks module file paths to tmp directory.
+
+    Deliberately does NOT reassign T.client_file / T.archive_task / etc.
+    Those are convenience wrappers defined in tasks.py itself that delegate
+    to tasks_core — reassigning them here would bypass the actual wrapper
+    code and mask bugs in it (e.g. a wrapper whose signature falls out of
+    sync with the function it forwards to). tasks_core.init(tmp) already
+    redirects the shared BASE_DIR/TASKS_DIR that every wrapper reads
+    through, so no reassignment is needed for isolation.
+    """
     C.init(tmp)
     T.BASE_DIR  = tmp
-    # Keep aliases in sync
-    import tasks_core
-    T.client_file    = lambda c: tasks_core.client_file(c)
-    T.archive_file   = lambda c: tasks_core.archive_file(c)
-    T.list_clients   = tasks_core.list_clients
-    T.parse_task_file = tasks_core.parse_task_file
-    T.write_task_file = tasks_core.write_task_file
-    T.archive_task   = tasks_core.archive_task
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────

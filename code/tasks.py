@@ -63,6 +63,13 @@ Version history:
          never mistaken for finished work in /report. Required updating
          generate_report() for tasks_core 1.2's renamed archive fields
          (parse_archive_file now returns "status"/"date", not "completed").
+    4.7  Fixed archive_task(c, t) convenience alias — never updated to accept
+         the status param added in 4.6, so delete_task() crashed with
+         "TypeError: archive_task() got an unexpected keyword argument
+         'status'" every time it ran. test_tasks.py's _set_tmp_dirs() had
+         been monkey-patching this exact alias to the real tasks_core
+         function during tests, silently bypassing the broken wrapper —
+         removed that reassignment so tests exercise the real one.
 
 Requirements:
     pip install requests rich prompt_toolkit
@@ -71,7 +78,7 @@ Usage:
     python tasks.py
 """
 
-VERSION = "4.6"
+VERSION = "4.7"
 
 import os
 import re
@@ -115,7 +122,7 @@ def save_last_client(c):    return core.save_last_client(c)
 def load_last_client():     return core.load_last_client()
 def parse_task_file(c):     return core.parse_task_file(c)
 def write_task_file(c, d):  return core.write_task_file(c, d)
-def archive_task(c, t):     return core.archive_task(c, t)
+def archive_task(c, t, status="completed"): return core.archive_task(c, t, status)
 def next_recur_date(*a, **k): return core.next_recur_date(*a, **k)
 
 console = Console()
