@@ -55,6 +55,15 @@ for stale in "$DOCS/chat.py" "$DOCS/run.sh"; do
     fi
 done
 
+# Clear stale bytecode cache. $DOCS is FUSE-mounted shared storage
+# (/storage/emulated/0), which has unreliable file-modification timestamps —
+# Python's import system can decide a .pyc is still fresh and silently keep
+# running old cached bytecode even after cp has overwritten the .py source.
+if [ -d "$DOCS/__pycache__" ]; then
+    rm -rf "$DOCS/__pycache__"
+    echo "  ✓ cleared stale __pycache__"
+fi
+
 # Run tests
 run_tests() {
     local file="$1"
