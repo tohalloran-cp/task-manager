@@ -51,8 +51,8 @@ core.init(base_dir)   # must be called before anything else
 Key functions:
 - `parse_task_file(client)` → dict with focuses, descriptions, tasks
 - `write_task_file(client, data)` — repacks priorities, writes markdown
-- `archive_task(client, task)` — appends to `client_archive.md`
-- `parse_archive_file(client)` → list of completed tasks (text, due, for, completed)
+- `archive_task(client, task, status="completed")` — appends to `client_archive.md`; status is `"completed"` or `"cancelled"`
+- `parse_archive_file(client)` → list of archived tasks (text, due, for, status, date)
 - `next_recur_date(recur, from_date, due_date)` — calculates next occurrence
 - `list_clients()`, `client_file()`, `archive_file()`
 - `load_last_client()`, `save_last_client()`
@@ -81,10 +81,13 @@ Recurrence: `[every monday]`, `[every weekly]`, `[every 3 months]` etc
 `for`: optional — who the task was promised to (commitment tracking)
 `since`: creation date, stamped automatically on every new task (used for staleness in `/review`)
 
-Archive file is a flat list:
+Archive file is a flat list. `[x]` = actually completed, `[-]` = deleted/cancelled
+without being done — kept distinct so `/report` never counts a scrapped task as
+finished work:
 ```markdown
 # Client Name — Archive
 - [x] Task text [due 15.05.2026] [for Sarah] [completed 10.05.2026]
+- [-] Abandoned task [cancelled 11.05.2026]
 ```
 
 ### Inference
@@ -99,8 +102,11 @@ The model returns a JSON array of operations:
 [{"action": "reprioritise", "priority": 3, "new_priority": 1}]
 ```
 
-Supported actions: add, edit, complete, start, block, reset, reprioritise, move,
-due, recur, for, create_focus, rename_focus, archive_focus, list, status, none
+Supported actions: add, edit, complete, delete, start, block, reset, reprioritise,
+move, due, recur, for, create_focus, rename_focus, archive_focus, list, status, none
+
+`delete` (aka `/task delete <#>` / `/task cancel <#>`) removes a task without marking
+it done — for when it's just not going to happen. Distinct from `complete`.
 
 `/report [days]` and `/review` are explicit-only commands (not inference actions) —
 a client status update and an interactive overdue/stale/blocked triage walkthrough,
@@ -188,7 +194,7 @@ Two test suites, both run automatically by `deploy.sh`:
 
 **test_tasks.py** — tests for tasks.py:
 - TestParseRoundTrip, TestPriorityRepack, TestAddTask
-- TestCompleteTask (including recurrence)
+- TestCompleteTask (including recurrence), TestDeleteTask
 - TestTaskMutations, TestReprioritise, TestFocusOperations
 - TestListClients, TestMockedInference, TestPhotoTask
 - TestReport, TestReview

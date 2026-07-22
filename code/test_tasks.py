@@ -404,6 +404,46 @@ class TestCompleteTask(unittest.TestCase):
         self.assertEqual(open_tasks[-1]["text"], "Weekly task")
 
 
+class TestDeleteTask(unittest.TestCase):
+    """delete_task — removes without marking done, archives as cancelled."""
+
+    def setUp(self):
+        self.tmp = _TMPDIR / "delete"
+        self.tmp.mkdir(exist_ok=True)
+        _set_tmp_dirs(self.tmp)
+        self.client = f"test_{self._testMethodName}"
+
+    def test_delete_removes_from_open_list(self):
+        T.add_task(self.client, "Task to scrap")
+        with patch.object(T, "display_tasks"):
+            T.delete_task(self.client, 1)
+        data = T.parse_task_file(self.client)
+        self.assertEqual(len([t for t in data["tasks"] if not t["done"]]), 0)
+
+    def test_delete_archives_as_cancelled_not_completed(self):
+        T.add_task(self.client, "Task to scrap")
+        with patch.object(T, "display_tasks"):
+            T.delete_task(self.client, 1)
+        content = T.archive_file(self.client).read_text()
+        self.assertIn("- [-] Task to scrap", content)
+        self.assertIn("[cancelled ", content)
+        self.assertNotIn("[completed ", content)
+
+    def test_delete_invalid_priority(self):
+        T.add_task(self.client, "Only task")
+        with patch.object(T, "display_tasks"):
+            T.delete_task(self.client, 99)
+        data = T.parse_task_file(self.client)
+        self.assertEqual(len([t for t in data["tasks"] if not t["done"]]), 1)
+
+    def test_delete_recurring_does_not_reschedule(self):
+        T.add_task(self.client, "Weekly task", due="02.06.2026", recur="weekly")
+        with patch.object(T, "display_tasks"):
+            T.delete_task(self.client, 1)
+        data = T.parse_task_file(self.client)
+        self.assertEqual(len([t for t in data["tasks"] if not t["done"]]), 0)
+
+
 class TestTaskMutations(unittest.TestCase):
     """edit, set_status, move, set_due_date, set_recur."""
 
@@ -623,6 +663,15 @@ class TestMockedInference(unittest.TestCase):
                     result = T.run_inference(self.client, "Task 1 is done")
         self.assertEqual(result[0]["action"], "complete")
 
+    def test_delete_action_via_inference(self):
+        ops = [{"action": "delete", "priority": 1}]
+        with patch("requests.post", return_value=self._mock_response(ops)):
+            with patch.object(T, "is_online", return_value=True):
+                with patch.object(T, "display_tasks"):
+                    T.force_local = False
+                    result = T.run_inference(self.client, "never mind task 1, scrap it")
+        self.assertEqual(result[0]["action"], "delete")
+
     def test_for_action_via_inference(self):
         ops = [{"action": "for", "priority": 1, "for": "Sarah"}]
         with patch("requests.post", return_value=self._mock_response(ops)):
@@ -732,6 +781,13 @@ class TestReport(unittest.TestCase):
         self._archive_with_completed_date("Old task", old)
         report = T.generate_report(self.client, days=7)
         self.assertNotIn("Old task", report)
+
+    def test_excludes_cancelled_tasks(self):
+        T.add_task(self.client, "Scrapped task")
+        with patch.object(T, "display_tasks"):
+            T.delete_task(self.client, 1)
+        report = T.generate_report(self.client, days=7)
+        self.assertNotIn("Scrapped task", report)
 
     def test_includes_for_annotation(self):
         today = datetime.now()

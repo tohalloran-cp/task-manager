@@ -16,9 +16,15 @@ Version history:
          (creation date) task tags — parsed, written, and carried into
          the archive line on completion (for only, not since)
          Added parse_archive_file() to read completed-task history
+    1.2  archive_task() now takes a status param ("completed" or
+         "cancelled") so tasks can be removed without being marked done.
+         Cancelled entries use a [-] marker and [cancelled DATE] tag
+         instead of [x]/[completed DATE]. parse_archive_file() returns
+         "status" and "date" instead of an implicit-completed "completed"
+         field — callers must update.
 """
 
-VERSION = "1.1"
+VERSION = "1.2"
 
 import re
 import calendar
@@ -183,8 +189,8 @@ def write_task_file(client: str, data: dict):
     client_file(client).write_text("\n".join(lines))
 
 
-def archive_task(client: str, task: dict):
-    """Append a completed task to the archive file."""
+def archive_task(client: str, task: dict, status: str = "completed"):
+    """Append a completed or cancelled task to the archive file."""
     _require_init()
     arc = archive_file(client)
     if not arc.exists():
@@ -192,31 +198,33 @@ def archive_task(client: str, task: dict):
     today = datetime.now().strftime(DATE_FMT)
     due_str = f" [due {task['due']}]" if task.get("due") else ""
     for_str = f" [for {task['for']}]" if task.get("for") else ""
-    line = f"- [x] {task['text']}{due_str}{for_str} [completed {today}]\n"
+    marker = "x" if status == "completed" else "-"
+    line = f"- [{marker}] {task['text']}{due_str}{for_str} [{status} {today}]\n"
     with arc.open("a") as f:
         f.write(line)
 
 
 def parse_archive_file(client: str) -> list[dict]:
-    """Parse a client's archive file into a list of completed tasks."""
+    """Parse a client's archive file into a list of completed/cancelled tasks."""
     _require_init()
     arc = archive_file(client)
     if not arc.exists():
         return []
 
     pattern = re.compile(
-        r"^- \[x\] (.+?)(?: \[due ([\d.]+)\])?(?: \[for ([^\]]+)\])? \[completed ([\d.]+)\]$"
+        r"^- \[[x-]\] (.+?)(?: \[due ([\d.]+)\])?(?: \[for ([^\]]+)\])? \[(completed|cancelled) ([\d.]+)\]$"
     )
     entries = []
     for line in arc.read_text().splitlines():
         match = pattern.match(line)
         if match:
-            text, due, for_person, completed = match.groups()
+            text, due, for_person, status, date = match.groups()
             entries.append({
                 "text": text.strip(),
                 "due": due,
                 "for": for_person,
-                "completed": completed,
+                "status": status,
+                "date": date,
             })
     return entries
 

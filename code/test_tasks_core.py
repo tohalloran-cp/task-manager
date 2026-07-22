@@ -336,6 +336,21 @@ class TestArchiveTask(unittest.TestCase):
         content = C.archive_file("test").read_text()
         self.assertNotIn("[for", content)
 
+    def test_cancelled_uses_dash_marker_and_tag(self):
+        task = {"text": "Abandoned thing", "due": None}
+        C.archive_task("test", task, status="cancelled")
+        content = C.archive_file("test").read_text()
+        self.assertIn("- [-] Abandoned thing", content)
+        self.assertIn("[cancelled ", content)
+        self.assertNotIn("[completed ", content)
+
+    def test_completed_defaults_to_x_marker_and_tag(self):
+        task = {"text": "Finished thing", "due": None}
+        C.archive_task("test", task)
+        content = C.archive_file("test").read_text()
+        self.assertIn("- [x] Finished thing", content)
+        self.assertIn("[completed ", content)
+
 
 # ── parse_archive_file ───────────────────────────────────────────────────────
 
@@ -355,7 +370,15 @@ class TestParseArchiveFile(unittest.TestCase):
         self.assertEqual(e["text"], "Do thing")
         self.assertEqual(e["due"], "15.06.2026")
         self.assertEqual(e["for"], "Sarah")
-        self.assertIsNotNone(e["completed"])
+        self.assertEqual(e["status"], "completed")
+        self.assertIsNotNone(e["date"])
+
+    def test_parses_cancelled_task(self):
+        C.archive_task("test", {"text": "Dropped thing"}, status="cancelled")
+        entries = C.parse_archive_file("test")
+        self.assertEqual(len(entries), 1)
+        self.assertEqual(entries[0]["status"], "cancelled")
+        self.assertIsNotNone(entries[0]["date"])
 
     def test_parses_task_without_due_or_for(self):
         C.archive_task("test", {"text": "Simple task", "due": None})

@@ -56,6 +56,13 @@ Version history:
     4.5  Weekly review — /review walks overdue, stale (>14d open, no due date),
          and blocked tasks for the current client one at a time with inline
          triage actions (done/start/block/reset/update due/keep/quit)
+    4.6  Added delete_task() — /task delete <#> (alias /task cancel), a
+         "delete" inference action, and an [x]delete option in /review.
+         Removes a task from the open list without marking it done; archived
+         with a [cancelled DATE] tag instead of [completed DATE] so it's
+         never mistaken for finished work in /report. Required updating
+         generate_report() for tasks_core 1.2's renamed archive fields
+         (parse_archive_file now returns "status"/"date", not "completed").
 
 Requirements:
     pip install requests rich prompt_toolkit
@@ -64,7 +71,7 @@ Usage:
     python tasks.py
 """
 
-VERSION = "4.5"
+VERSION = "4.6"
 
 import os
 import re
@@ -334,6 +341,24 @@ def complete_task(client: str, priority: int):
     display_tasks(client)
 
 
+def delete_task(client: str, priority: int):
+    """Remove an open task without marking it done. Archived as cancelled, not completed."""
+    data = parse_task_file(client)
+    open_tasks = [t for t in data["tasks"] if not t["done"]]
+    match = next((t for t in open_tasks if t["priority"] == priority), None)
+    if not match:
+        console.print(f"[yellow]No task #{priority}[/yellow]")
+        return
+
+    match["done"] = True
+    archive_task(client, match, status="cancelled")
+    log("info", f"Task cancelled: #{priority} {match['text']}")
+    console.print(f"[yellow]✗ Cancelled: {match['text']}[/yellow]")
+
+    write_task_file(client, data)
+    display_tasks(client)
+
+
 def set_task_status(client: str, priority: int, status: str):
     """Set status of an open task: open, in_progress, blocked."""
     data = parse_task_file(client)
@@ -506,6 +531,7 @@ Available actions:
 - add: {{"action": "add", "text": "task description", "focus": "General", "due": "15.05.2026" or null, "recur": "monday" or "weekly" or "monthly" or null, "for": "Sarah" or null, "priority": {next_pri}}}
 - edit: {{"action": "edit", "priority": 3, "text": "updated task description"}}
 - complete: {{"action": "complete", "priority": 3}}
+- delete: {{"action": "delete", "priority": 3}}
 - start: {{"action": "start", "priority": 3}}
 - block: {{"action": "block", "priority": 3}}
 - reset: {{"action": "reset", "priority": 3}}
@@ -522,6 +548,11 @@ Available actions:
 - none: {{"action": "none", "response": "conversational reply to user"}}
 
 Supported recurrence values: daily, weekly, fortnightly, monthly, monday, tuesday, wednesday, thursday, friday, saturday, sunday
+
+Use "complete" only when the task was actually done. Use "delete" when the user
+wants a task gone without having done it — phrases like "scrap that", "never mind
+#3", "forget about the migration task", "remove it", "cancel that one". Both take
+it off the open list, but "delete" does not count as finished work.
 
 The "for" field is the person a task was promised to — extract a name from phrases
 like "for Sarah", "Sarah asked me to...", "promised John I'd...". Leave it null if
@@ -633,6 +664,8 @@ def execute_operations(client: str, operations: list):
             set_for(client, int(op["priority"]), op.get("for"))
         elif action == "complete":
             complete_task(client, int(op["priority"]))
+        elif action == "delete":
+            delete_task(client, int(op["priority"]))
         elif action == "start":
             set_task_status(client, int(op["priority"]), "in_progress")
         elif action == "block":
@@ -693,8 +726,10 @@ def generate_report(client: str, days: int = 7) -> str:
     archive = core.parse_archive_file(client)
     completed = []
     for entry in archive:
+        if entry.get("status") != "completed":
+            continue
         try:
-            completed_date = datetime.strptime(entry["completed"], DATE_FMT)
+            completed_date = datetime.strptime(entry["date"], DATE_FMT)
         except (ValueError, TypeError):
             continue
         if completed_date >= cutoff:
@@ -826,13 +861,15 @@ def review_client(client: str):
             for_str = f" [for {current['for']}]" if current.get("for") else ""
             console.print(f"[bold]#{current['priority']}[/bold] {current['text']}{due}{for_str}  [dim]({reason})[/dim]")
             choice = Prompt.ask(
-                "  [d]one / [s]tart / [b]lock / [r]eset / [u]pdate due / [k]eep / [q]uit",
+                "  [d]one / [x]delete / [s]tart / [b]lock / [r]eset / [u]pdate due / [k]eep / [q]uit",
                 default="k"
             ).strip().lower()
 
             pri = current["priority"]
             if choice == "d":
                 complete_task(client, pri)
+            elif choice == "x":
+                delete_task(client, pri)
             elif choice == "s":
                 set_task_status(client, pri, "in_progress")
             elif choice == "b":
@@ -943,6 +980,7 @@ def show_help():
         "/task start <#>           — mark in progress [~]\n"
         "/task block <#>           — mark blocked [!]\n"
         "/task reset <#>           — back to open\n"
+        "/task delete <#>          — remove a task without completing it (archived as cancelled)\n"
         "/task pri <#> <new#>      — reprioritise\n"
         "/task move <#> <focus>    — move to focus\n"
         "/task recur <#> <pattern> — set recurrence (daily/weekly/monthly/monday etc)\n"
@@ -1164,6 +1202,11 @@ def main():
                         complete_task(client, int(arg2))
                     except ValueError:
                         console.print("[yellow]Usage: /task done <number>[/yellow]")
+                elif subcmd in ("delete", "cancel"):
+                    try:
+                        delete_task(client, int(arg2))
+                    except ValueError:
+                        console.print("[yellow]Usage: /task delete <number>[/yellow]")
                 elif subcmd == "pri":
                     nums = arg2.split()
                     if len(nums) == 2:
@@ -1207,7 +1250,7 @@ def main():
                     else:
                         console.print("[yellow]Usage: /task for <#> <name> or /task for <#> clear[/yellow]")
                 else:
-                    console.print("[yellow]Usage: /task list|done|pri|move|due|for[/yellow]")
+                    console.print("[yellow]Usage: /task list|done|delete|pri|move|due|for[/yellow]")
 
             elif cmd == "/focus":
                 subcmd = arg1.lower()
